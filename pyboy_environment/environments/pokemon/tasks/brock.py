@@ -19,7 +19,7 @@ class PokemonBrock(PokemonEnvironment):
         self.visited_coord = set()
         self.visited_map = set()
         # self.visited_location = set()
-
+        self.is_touching_grass = False
         # enemy stats
         self.enemy_hp = -1
 
@@ -59,6 +59,7 @@ class PokemonBrock(PokemonEnvironment):
             game_stats["badges"],            # Number of badges
             game_stats["location"]["x"],      # Agent's x-coordinate
             game_stats["location"]["y"],      # Agent's y-coordinate
+            self._is_grass_tile(),            # on grass boolean
             # game_stats["location"]["map_id"],      # Agent's y-coordinate
             # sum(game_stats["xp"]),            # Total XP
             # game_stats["seen_pokemon"],   # Number of Pokemon seen
@@ -74,15 +75,16 @@ class PokemonBrock(PokemonEnvironment):
         # see_pokemon_reward = self.reward_see_new_pokemon(new_state)
         # catch_pokemon_reward = self.reward_catch_new_pokemon(new_state)
         # attack_reward = self.reward_attack_pokemon(new_state)
-        # touch_grass_reward = self.reward_touch_grass(new_state)
+        touch_grass_reward = self.reward_touch_grass(new_state)
 
-        reward = new_coord_reward 
+        reward = new_coord_reward + touch_grass_reward
         # + new_map_reward + gain_xp_reward + see_pokemon_reward 
         
         # PENALTY
-        # visit_old_map_penalty = self.penalty_back_to_old_map(new_state)
+        # near_obstacle_penalty = self.penalty_near_obstacle(new_state)
         # not_moving_penalty = self.penalty_not_moving(new_state)
-        # penalty = not_moving_penalty
+        # visit_old_map_penalty = self.penalty_back_to_old_map(new_state)
+        
         
         return reward
         # return reward + penalty
@@ -114,10 +116,20 @@ class PokemonBrock(PokemonEnvironment):
         y = new_state["location"]["y"]
         if (x,y) not in self.visited_coord: # visit new coord
             self.visited_coord.add((x, y))
-            return 0.5
+            return 1
         else:
             return 0
-
+        
+    def penalty_near_obstacle(self, new_state: dict[str, any]) -> float:
+        if self.is_near_wall_or_lake(new_state):
+            return -0.5  # Penalize strongly for sticking to walls or lakes
+        return 0
+    
+    def reward_touch_grass(self, new_state: dict[str, any]) -> int:
+        if self._is_grass_tile():
+            return 0.5
+        return 0
+    
     def penalty_not_moving(self, new_state: dict[str, any]) -> float:
         x = new_state["location"]["x"]
         y = new_state["location"]["y"]
@@ -129,11 +141,7 @@ class PokemonBrock(PokemonEnvironment):
             return -0.1
         return 0
 
-    def penalty_near_obstacle(self, new_state: dict[str, any]) -> float:
-        if self.is_near_wall_or_lake(new_state):
-            return -0.3  # Penalize strongly for sticking to walls or lakes
-        return 0
-    
+
     def reward_new_map(self, new_state: dict[str, any]) -> float:
         map = new_state["location"]["map_id"]
         old_map = self.prior_game_stats["location"]["map_id"]
@@ -166,10 +174,7 @@ class PokemonBrock(PokemonEnvironment):
         self.enemy_hp = new_enemy_hp
         return 0
     
-    def reward_touch_grass(self, new_state: dict[str, any]) -> int:
-        if self._is_grass_tile():
-            return 0.2
-        return 0
+  
     
     # def penalty_back_to_old_map(self, new_state: dict[str, any]) -> float:
     #     map = new_state["location"]["map"]
@@ -229,7 +234,12 @@ class PokemonBrock(PokemonEnvironment):
         # if 383 exists in the game area, then the agent is stuck in dialog
         return 383 in screen
     
-    def is_near_wall_or_lake(self, x, y) -> bool:
+    def is_near_wall_or_lake(self) -> bool:
         walkable_map = self._get_screen_walkable_matrix()
 
-        return walkable_map[y + 1][x] == 0 or walkable_map[y - 1][x] == 0  or walkable_map[y][x+ 1] == 0 or walkable_map[y][x - 1] == 0
+        for i in range(2,6):
+            for j in range(2,6):
+                if walkable_map[i][j] == 0:
+                    return True
+
+        return False

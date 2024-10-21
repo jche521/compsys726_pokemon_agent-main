@@ -57,68 +57,86 @@ class PokemonBrock(PokemonEnvironment):
      
         return np.array([
             game_stats["badges"],            # Number of badges
-            # game_stats["location"]["x"],      # Agent's x-coordinate
-            # game_stats["location"]["y"],      # Agent's y-coordinate
+            game_stats["location"]["x"],      # Agent's x-coordinate
+            game_stats["location"]["y"],      # Agent's y-coordinate
+            # game_stats["location"]["map_id"],      # Agent's y-coordinate
             # sum(game_stats["xp"]),            # Total XP
             # game_stats["seen_pokemon"],   # Number of Pokemon seen
             # game_stats["caught_pokemon"],   # Number of Pokemon seen
         ])
 
     def _calculate_reward(self, new_state: dict) -> float:
-        new_coord_reward = self.reward_new_coord(new_state)
 
         # REWARD
-        new_map_reward = self.reward_new_map(new_state)
-        moving_reward = self.reward_moving(new_state)
-        gain_xp_reward = self.reward_gain_xp(new_state)
-        see_pokemon_reward = self.reward_see_new_pokemon(new_state)
-        catch_pokemon_reward = self.reward_catch_new_pokemon(new_state)
-        attack_reward = self.reward_attack_pokemon(new_state)
-        touch_grass_reward = self.reward_touch_grass(new_state)
+        new_coord_reward = self.reward_new_coord(new_state)
+        # new_map_reward = self.reward_new_map(new_state)
+        # gain_xp_reward = self.reward_gain_xp(new_state)
+        # see_pokemon_reward = self.reward_see_new_pokemon(new_state)
+        # catch_pokemon_reward = self.reward_catch_new_pokemon(new_state)
+        # attack_reward = self.reward_attack_pokemon(new_state)
+        # touch_grass_reward = self.reward_touch_grass(new_state)
 
-        reward = moving_reward + new_map_reward + gain_xp_reward + see_pokemon_reward 
+        reward = new_coord_reward 
+        # + new_map_reward + gain_xp_reward + see_pokemon_reward 
         
         # PENALTY
-        visit_old_map_penalty = self.penalty_back_to_old_map(new_state)
-
-        penalty = visit_old_map_penalty
-
-        return  reward 
+        # visit_old_map_penalty = self.penalty_back_to_old_map(new_state)
+        # not_moving_penalty = self.penalty_not_moving(new_state)
+        # penalty = not_moving_penalty
+        
+        return reward
+        # return reward + penalty
 
     
     def _check_if_done(self, game_stats: dict[str, any]) -> bool:
         # Setting done to true if agent beats first gym (temporary)
-        return game_stats["badges"] > self.prior_game_stats["badges"]
+        done = game_stats["badges"] > self.prior_game_stats["badges"]
+    
+        if done:
+            # Reset visited coordinates and maps
+            self.visited_coord.clear()
+            self.visited_map.clear()
+
+        return done
 
     def _check_if_truncated(self, game_stats: dict) -> bool:
-        # Implement your truncation check logic here
+        truncated = self.steps >= 2048
+    
+        if truncated:
+            # Reset visited coordinates and maps
+            self.visited_coord.clear()
+            self.visited_map.clear()
 
-        # Maybe if we run out of pokeballs...? or a max step count
-        return self.steps >= 5000
+        return truncated
+    
+    def reward_new_coord(self, new_state: dict[str, any]) -> float:
+        x = new_state["location"]["x"]
+        y = new_state["location"]["y"]
+        if (x,y) not in self.visited_coord: # visit new coord
+            self.visited_coord.add((x, y))
+            return 0.5
+        else:
+            return 0
 
-    def reward_moving(self, new_state: dict[str, any]) -> float:
+    def penalty_not_moving(self, new_state: dict[str, any]) -> float:
         x = new_state["location"]["x"]
         y = new_state["location"]["y"]
 
         old_x = self.prior_game_stats["location"]["x"]
         old_y = self.prior_game_stats["location"]["y"]
 
-        if x != old_x or y != old_y:
-            return 0.01
+        if not self.in_dialog() and x == old_x and y == old_y:
+            return -0.1
         return 0
 
-    def reward_new_coord(self, new_state: dict[str, any]) -> float:
-        x = new_state["location"]["x"]
-        y = new_state["location"]["y"]
-        if (x,y) not in self.visited_coord: # visit new coord
-            self.visited_coord.add((x, y))
-            return 0.05
-        else:
-            return 0
+    def penalty_near_obstacle(self, new_state: dict[str, any]) -> float:
+        if self.is_near_wall_or_lake(new_state):
+            return -0.3  # Penalize strongly for sticking to walls or lakes
+        return 0
     
     def reward_new_map(self, new_state: dict[str, any]) -> float:
-        map = new_state["location"]["map"]
-        old_map = self.prior_game_stats["location"]["map"]
+        map = new_state["location"]["map_id"]
+        old_map = self.prior_game_stats["location"]["map_id"]
 
         # if map not in self.visited_map: #visit new map
         #     self.visited_map.add(map)
@@ -129,12 +147,12 @@ class PokemonBrock(PokemonEnvironment):
         if map != old_map:
             if map in self.visited_map:
                 print(f"Back to an old map: {map} applying penalty.")
-                return -0.2
+                return -1
             else:
                 print(f"New map visited: {map} giving reward.")
                 self.visited_map.add(map)
                 self.visited_coord.clear() # clear the visited coord for new map
-                return 0.2
+                return 4
         return 0
     
     def reward_attack_pokemon(self, new_state: dict[str, any]) -> float:
@@ -153,13 +171,13 @@ class PokemonBrock(PokemonEnvironment):
             return 0.2
         return 0
     
-    def penalty_back_to_old_map(self, new_state: dict[str, any]) -> float:
-        map = new_state["location"]["map"]
-        old_map = self.prior_game_stats["location"]["map"]
+    # def penalty_back_to_old_map(self, new_state: dict[str, any]) -> float:
+    #     map = new_state["location"]["map"]
+    #     old_map = self.prior_game_stats["location"]["map"]
 
-        if map != old_map and map in self.visited_map:
-            return -0.1
-        return 0
+    #     if map != old_map and map in self.visited_map:
+    #         return -0.1
+    #     return 0
 
     def reward_gain_xp(self, new_state: dict[str, any]) -> float:
         if sum(new_state["xp"]) > sum(self.prior_game_stats["xp"]):
@@ -203,3 +221,15 @@ class PokemonBrock(PokemonEnvironment):
 
     def in_battle(self) -> bool:
         return self._read_m(0xD057) != 0x00
+    
+    def in_dialog(self) -> bool:
+        screen: np.ndarray = self.pyboy.game_area()  # 383
+        is_in_dialog = False
+
+        # if 383 exists in the game area, then the agent is stuck in dialog
+        return 383 in screen
+    
+    def is_near_wall_or_lake(self, x, y) -> bool:
+        walkable_map = self._get_screen_walkable_matrix()
+
+        return walkable_map[y + 1][x] == 0 or walkable_map[y - 1][x] == 0  or walkable_map[y][x+ 1] == 0 or walkable_map[y][x - 1] == 0

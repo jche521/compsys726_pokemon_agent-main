@@ -19,3 +19,6 @@ roms/
 results/
 
 *client_secrets.json
+vsdevcmd.trace.txt
+cares_rl_configs/pokemon/PokemonRed.gb
+cares_rl_configs/pokemon/task_init_states/has_pokedex.state

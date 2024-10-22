@@ -18,7 +18,6 @@ class PokemonBrock(PokemonEnvironment):
     ) -> None:
         self.visited_coord = set()
         self.visited_map = set()
-        # self.visited_location = set()
         self.is_touching_grass = False
         # enemy stats
         self.enemy_hp = -1
@@ -60,8 +59,8 @@ class PokemonBrock(PokemonEnvironment):
             game_stats["location"]["x"],      # Agent's x-coordinate
             game_stats["location"]["y"],      # Agent's y-coordinate
             self._is_grass_tile(),            # on grass boolean
-            # game_stats["location"]["map_id"],      # Agent's y-coordinate
-            # sum(game_stats["xp"]),            # Total XP
+            game_stats["location"]["map_id"],      # Agent's y-coordinate
+            # sum(game_stats["xp"]) - 220,            # Total XP
             # game_stats["seen_pokemon"],   # Number of Pokemon seen
             # game_stats["caught_pokemon"],   # Number of Pokemon seen
         ])
@@ -70,15 +69,16 @@ class PokemonBrock(PokemonEnvironment):
 
         # REWARD
         new_coord_reward = self.reward_new_coord(new_state)
-        # new_map_reward = self.reward_new_map(new_state)
-        # gain_xp_reward = self.reward_gain_xp(new_state)
+        touch_grass_reward = self.reward_touch_grass(new_state)
+        new_map_reward = self.reward_new_map(new_state)
+        gain_xp_reward = self.reward_gain_xp(new_state)
         # see_pokemon_reward = self.reward_see_new_pokemon(new_state)
         # catch_pokemon_reward = self.reward_catch_new_pokemon(new_state)
         # attack_reward = self.reward_attack_pokemon(new_state)
-        touch_grass_reward = self.reward_touch_grass(new_state)
+        
 
-        reward = new_coord_reward + touch_grass_reward
-        # + new_map_reward + gain_xp_reward + see_pokemon_reward 
+        reward = new_coord_reward + touch_grass_reward + new_map_reward
+        # + new_map_reward + gain_xp_reward + see_pokemon_reward + attack_reward
         
         # PENALTY
         # near_obstacle_penalty = self.penalty_near_obstacle(new_state)
@@ -111,6 +111,18 @@ class PokemonBrock(PokemonEnvironment):
 
         return truncated
     
+    ############################
+    ## STATE UPDATE FUNCTIONS ##
+    ############################
+    
+    
+
+
+
+
+    ############################
+    ## REWARD FUNCTIONS ##
+    ############################
     def reward_new_coord(self, new_state: dict[str, any]) -> float:
         x = new_state["location"]["x"]
         y = new_state["location"]["y"]
@@ -119,7 +131,7 @@ class PokemonBrock(PokemonEnvironment):
             return 1
         else:
             return 0
-        
+    
     def penalty_near_obstacle(self, new_state: dict[str, any]) -> float:
         if self.is_near_wall_or_lake(new_state):
             return -0.5  # Penalize strongly for sticking to walls or lakes
@@ -141,40 +153,26 @@ class PokemonBrock(PokemonEnvironment):
             return -0.1
         return 0
 
-
     def reward_new_map(self, new_state: dict[str, any]) -> float:
         map = new_state["location"]["map_id"]
         old_map = self.prior_game_stats["location"]["map_id"]
 
-        # if map not in self.visited_map: #visit new map
-        #     self.visited_map.add(map)
-        #     self.visited_coord.clear() # clear the visited coord for new map
-        #     print("NEW MAP")
-        #     return 0.2
-        # return 0
-        if map != old_map:
-            if map in self.visited_map:
-                print(f"Back to an old map: {map} applying penalty.")
-                return -1
-            else:
-                print(f"New map visited: {map} giving reward.")
-                self.visited_map.add(map)
-                self.visited_coord.clear() # clear the visited coord for new map
-                return 4
+        if map not in self.visited_map: #visit new map
+            print(f"New map visited: {map} giving reward.")
+            self.visited_map.add(map)
+            return 2
         return 0
     
     def reward_attack_pokemon(self, new_state: dict[str, any]) -> float:
         new_enemy_hp = self.get_enemy_hp()
-
+        print(new_enemy_hp, self.enemy_hp)
         # Check if the enemy HP has decreased
         if new_enemy_hp < self.enemy_hp:
             self.enemy_hp = new_enemy_hp
-            return 0.2
+            return 2
         
         self.enemy_hp = new_enemy_hp
         return 0
-    
-  
     
     # def penalty_back_to_old_map(self, new_state: dict[str, any]) -> float:
     #     map = new_state["location"]["map"]
@@ -187,7 +185,7 @@ class PokemonBrock(PokemonEnvironment):
     def reward_gain_xp(self, new_state: dict[str, any]) -> float:
         if sum(new_state["xp"]) > sum(self.prior_game_stats["xp"]):
             print("GAIN XP")
-            return 0.8 #0.5
+            return 5 #0.5
         return 0
     
     def reward_catch_new_pokemon(self, new_state: dict[str, any]) -> float:
@@ -223,7 +221,6 @@ class PokemonBrock(PokemonEnvironment):
     def get_enemy_hp(self) -> None:
         return self._read_m(0xCFE7)
         
-
     def in_battle(self) -> bool:
         return self._read_m(0xD057) != 0x00
     
@@ -243,3 +240,53 @@ class PokemonBrock(PokemonEnvironment):
                     return True
 
         return False
+    
+    def get_explore_map(self, map_idx):
+        map_locations = {
+            0: {"name": "Pallet Town", "coordinates": np.array([70, 7])},
+            1: {"name": "Viridian City", "coordinates": np.array([60, 79])},
+            2: {"name": "Pewter City", "coordinates": np.array([60, 187])},
+            3: {"name": "Cerulean City", "coordinates": np.array([240, 205])},
+            62: {"name": "Invaded house (Cerulean City)", "coordinates": np.array([290, 227])},
+            63: {"name": "trade house (Cerulean City)", "coordinates": np.array([290, 212])},
+            64: {"name": "Pokémon Center (Cerulean City)", "coordinates": np.array([290, 197])},
+            65: {"name": "Pokémon Gym (Cerulean City)", "coordinates": np.array([290, 182])},
+            66: {"name": "Bike Shop (Cerulean City)", "coordinates": np.array([290, 167])},
+            67: {"name": "Poké Mart (Cerulean City)", "coordinates": np.array([290, 152])},
+            35: {"name": "Route 24", "coordinates": np.array([250, 235])},
+            36: {"name": "Route 25", "coordinates": np.array([270, 267])},
+            12: {"name": "Route 1", "coordinates": np.array([70, 43])},
+            13: {"name": "Route 2", "coordinates": np.array([70, 151])},
+            14: {"name": "Route 3", "coordinates": np.array([100, 179])},
+            15: {"name": "Route 4", "coordinates": np.array([150, 197])},
+            33: {"name": "Route 22", "coordinates": np.array([20, 71])},
+            37: {"name": "Red house first", "coordinates": np.array([61, 9])},
+            38: {"name": "Red house second", "coordinates": np.array([61, 0])},
+            39: {"name": "Blues house", "coordinates": np.array([91, 9])},
+            40: {"name": "oaks lab", "coordinates": np.array([91, 1])},
+            41: {"name": "Pokémon Center (Viridian City)", "coordinates": np.array([100, 54])},
+            42: {"name": "Poké Mart (Viridian City)", "coordinates": np.array([100, 62])},
+            43: {"name": "School (Viridian City)", "coordinates": np.array([100, 79])},
+            44: {"name": "House 1 (Viridian City)", "coordinates": np.array([100, 71])},
+            47: {"name": "Gate (Viridian City/Pewter City) (Route 2)", "coordinates": np.array([91,143])},
+            49: {"name": "Gate (Route 2)", "coordinates": np.array([91,115])},
+            50: {"name": "Gate (Route 2/Viridian Forest) (Route 2)", "coordinates": np.array([91,115])},
+            51: {"name": "viridian forest", "coordinates": np.array([35, 144])},
+            52: {"name": "Pewter Museum (floor 1)", "coordinates": np.array([60, 196])},
+            53: {"name": "Pewter Museum (floor 2)", "coordinates": np.array([60, 205])},
+            54: {"name": "Pokémon Gym (Pewter City)", "coordinates": np.array([49, 176])},
+            55: {"name": "House with disobedient Nidoran♂ (Pewter City)", "coordinates": np.array([51, 184])},
+            56: {"name": "Poké Mart (Pewter City)", "coordinates": np.array([40, 170])},
+            57: {"name": "House with two Trainers (Pewter City)", "coordinates": np.array([51, 184])},
+            58: {"name": "Pokémon Center (Pewter City)", "coordinates": np.array([45, 161])},
+            59: {"name": "Mt. Moon (Route 3 entrance)", "coordinates": np.array([153, 234])},
+            60: {"name": "Mt. Moon Corridors", "coordinates": np.array([168, 253])},
+            61: {"name": "Mt. Moon Level 2", "coordinates": np.array([197, 253])},
+            68: {"name": "Pokémon Center (Route 3)", "coordinates": np.array([135, 197])},
+            193: {"name": "Badges check gate (Route 22)", "coordinates": np.array([0, 87])}, # TODO this coord is guessed, needs to be updated
+            230: {"name": "Badge Man House (Cerulean City)", "coordinates": np.array([290, 137])}
+        }
+        if map_idx in map_locations.keys():
+            return map_locations[map_idx]
+        else:
+            return {"name": "Unknown", "coordinates": np.array([80, 0])} # TODO once all maps are added this case won't be needed

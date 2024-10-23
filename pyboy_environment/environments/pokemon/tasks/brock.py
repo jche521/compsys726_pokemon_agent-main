@@ -1,5 +1,6 @@
 from functools import cached_property
 
+import cv2
 import numpy as np
 from pyboy.utils import WindowEvent
 
@@ -7,7 +8,7 @@ from pyboy_environment.environments.pokemon.pokemon_environment import (
     PokemonEnvironment,
 )
 from pyboy_environment.environments.pokemon import pokemon_constants as pkc
-
+import torch
 
 class PokemonBrock(PokemonEnvironment):
     def __init__(
@@ -19,6 +20,7 @@ class PokemonBrock(PokemonEnvironment):
         self.visited_coord = set()
         self.visited_map = set()
         self.is_touching_grass = False
+        self.attack_count = 0
         # enemy stats
         self.enemy_hp = -1
 
@@ -53,17 +55,31 @@ class PokemonBrock(PokemonEnvironment):
     def _get_state(self) -> np.ndarray:
         # Implement your state retrieval logic here
         game_stats = self._generate_game_stats()
-     
-        return np.array([
-            game_stats["badges"],            # Number of badges
-            game_stats["location"]["x"],      # Agent's x-coordinate
-            game_stats["location"]["y"],      # Agent's y-coordinate
-            self._is_grass_tile(),            # on grass boolean
-            game_stats["location"]["map_id"],      # Agent's y-coordinate
+        
+        stats = np.array([
+            # game_stats["badges"],            # Number of badges
+            # game_stats["location"]["x"],      # Agent's x-coordinate
+            # game_stats["location"]["y"],      # Agent's y-coordinate
+            # self._is_grass_tile(),            # on grass boolean
+            # game_stats["location"]["map_id"],      # Agent's y-coordinate
+            (sum(game_stats["levels"])-6)/5,
+            self.enemy_hp,
+            self.attack_count
             # sum(game_stats["xp"]) - 220,            # Total XP
             # game_stats["seen_pokemon"],   # Number of Pokemon seen
             # game_stats["caught_pokemon"],   # Number of Pokemon seen
         ])
+        
+        # Grab the RGB frame using the existing grab_frame function
+        frame = self.grab_frame(height=240, width=300)
+        frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        frame_normalized = frame_gray  # Normalize pixel values to [0, 1]
+        frame_normalized = frame_gray / 255.0
+        frame_resized = cv2.resize(frame_normalized, (75, 60), interpolation=cv2.INTER_AREA).flatten()
+        frame_tensor = torch.tensor(frame_resized, dtype=torch.float32)
+        stats_tensor = torch.tensor(stats, dtype=torch.float32)
+        combined_tensor = torch.cat((stats_tensor, frame_tensor))
+        return combined_tensor  
 
     def _calculate_reward(self, new_state: dict) -> float:
 
@@ -74,21 +90,24 @@ class PokemonBrock(PokemonEnvironment):
         gain_xp_reward = self.reward_gain_xp(new_state)
         # see_pokemon_reward = self.reward_see_new_pokemon(new_state)
         # catch_pokemon_reward = self.reward_catch_new_pokemon(new_state)
-        # attack_reward = self.reward_attack_pokemon(new_state)
+        attack_reward = 0
+        if self.in_dialog:
+            if self.enemy_hp != self.get_enemy_hp():
+                attack_reward = self.reward_attack_pokemon(new_state)
+                print(f"---FIGHTING REWARD: {attack_reward}---")
         
-
-        reward = new_coord_reward + touch_grass_reward + new_map_reward
+        reward = new_coord_reward + touch_grass_reward + new_map_reward + gain_xp_reward + attack_reward
         # + new_map_reward + gain_xp_reward + see_pokemon_reward + attack_reward
         
         # PENALTY
         # near_obstacle_penalty = self.penalty_near_obstacle(new_state)
-        # not_moving_penalty = self.penalty_not_moving(new_state)
-        # visit_old_map_penalty = self.penalty_back_to_old_map(new_state)
-        
-        
-        return reward
-        # return reward + penalty
+        not_moving_penalty = self.penalty_not_moving(new_state)
 
+        # visit_old_map_penalty = self.penalty_back_to_old_map(new_state)
+        penalty = not_moving_penalty
+
+        # return reward
+        return reward + penalty
     
     def _check_if_done(self, game_stats: dict[str, any]) -> bool:
         # Setting done to true if agent beats first gym (temporary)
@@ -110,15 +129,6 @@ class PokemonBrock(PokemonEnvironment):
             self.visited_map.clear()
 
         return truncated
-    
-    ############################
-    ## STATE UPDATE FUNCTIONS ##
-    ############################
-    
-    
-
-
-
 
     ############################
     ## REWARD FUNCTIONS ##
@@ -131,10 +141,16 @@ class PokemonBrock(PokemonEnvironment):
             return 1
         else:
             return 0
-    
-    def penalty_near_obstacle(self, new_state: dict[str, any]) -> float:
-        if self.is_near_wall_or_lake(new_state):
-            return -0.5  # Penalize strongly for sticking to walls or lakes
+        
+    def reward_new_map(self, new_state: dict[str, any]) -> float:
+        map = new_state["location"]["map_id"]
+        old_map = self.prior_game_stats["location"]["map_id"]
+
+        if map not in self.visited_map: #visit new map
+            map_name = new_state["location"]["map"]
+            print(f"---NEW MAP: {map_name}---")
+            self.visited_map.add(map)
+            return 3
         return 0
     
     def reward_touch_grass(self, new_state: dict[str, any]) -> int:
@@ -152,27 +168,40 @@ class PokemonBrock(PokemonEnvironment):
         if not self.in_dialog() and x == old_x and y == old_y:
             return -0.1
         return 0
-
-    def reward_new_map(self, new_state: dict[str, any]) -> float:
-        map = new_state["location"]["map_id"]
-        old_map = self.prior_game_stats["location"]["map_id"]
-
-        if map not in self.visited_map: #visit new map
-            print(f"New map visited: {map} giving reward.")
-            self.visited_map.add(map)
-            return 2
-        return 0
     
+    def reward_gain_xp(self, new_state: dict[str, any]) -> float:
+        if sum(new_state["xp"]) > sum(self.prior_game_stats["xp"]):
+            print("---GAIN XP---")
+            return 20 #10
+        return 0
+
     def reward_attack_pokemon(self, new_state: dict[str, any]) -> float:
         new_enemy_hp = self.get_enemy_hp()
-        print(new_enemy_hp, self.enemy_hp)
-        # Check if the enemy HP has decreased
+        hp = self._read_party_hp()
+        self_hp = sum(hp["current"]) / sum(hp["max"])
+
         if new_enemy_hp < self.enemy_hp:
+            print(f"--ATTACK: self: {self_hp} enemy: new {new_enemy_hp}, old {self.enemy_hp}--")
+            self.attack_count += 1
             self.enemy_hp = new_enemy_hp
-            return 2
+            return 5 * (self.attack_count ** 2)
+        
+        if self.attack_count != 0:
+            self.attack_count = 0
+            return -5
         
         self.enemy_hp = new_enemy_hp
         return 0
+    
+    
+    
+    
+    def penalty_near_obstacle(self, new_state: dict[str, any]) -> float:
+        if self.is_near_wall_or_lake(new_state):
+            return -0.5  # Penalize strongly for sticking to walls or lakes
+        return 0
+    
+
     
     # def penalty_back_to_old_map(self, new_state: dict[str, any]) -> float:
     #     map = new_state["location"]["map"]
@@ -181,12 +210,6 @@ class PokemonBrock(PokemonEnvironment):
     #     if map != old_map and map in self.visited_map:
     #         return -0.1
     #     return 0
-
-    def reward_gain_xp(self, new_state: dict[str, any]) -> float:
-        if sum(new_state["xp"]) > sum(self.prior_game_stats["xp"]):
-            print("GAIN XP")
-            return 5 #0.5
-        return 0
     
     def reward_catch_new_pokemon(self, new_state: dict[str, any]) -> float:
         if new_state["caught_pokemon"] > self.prior_game_stats["caught_pokemon"]:
@@ -219,7 +242,12 @@ class PokemonBrock(PokemonEnvironment):
     ## HELPER FUNCTIONS ##
     ######################
     def get_enemy_hp(self) -> None:
-        return self._read_m(0xCFE7)
+        enemy_current_hp = self._read_m(0xCFE7) 
+        enemy_max_hp = self._read_m(0xCFF5)
+
+        if enemy_current_hp == 0:
+            return 0
+        return enemy_current_hp/enemy_max_hp
         
     def in_battle(self) -> bool:
         return self._read_m(0xD057) != 0x00
